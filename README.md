@@ -188,7 +188,13 @@ Stored as `session["parsed"] = {"description": "vintage graphic tee", "size": No
 <!-- For each tool, describe the specific failure mode and what your agent does in response.
      This maps to the error handling section of the rubric (F5-C1). -->
 
-Every one of these was triggered deliberately during Milestone 5 (see `demo_failures.py`, which reproduces all of them in one run). No path raises an exception to the user.
+Every one of these was triggered deliberately during Milestone 5, both from the terminal and through the agent, and each is pinned by a test in `tests/`. No path raises an exception to the user. To reproduce the three core cases directly:
+
+```bash
+python -c "from tools import search_listings; print(search_listings('designer ballgown', size='XXS', max_price=5))"
+python -c "from tools import search_listings, suggest_outfit; from utils.data_loader import get_empty_wardrobe; print(suggest_outfit(search_listings('vintage graphic tee', max_price=50)[0], get_empty_wardrobe()))"
+python -c "from tools import search_listings, create_fit_card; print(create_fit_card('', search_listings('vintage graphic tee', max_price=50)[0]))"
+```
 
 | Tool | Failure mode | Agent response |
 |------|-------------|----------------|

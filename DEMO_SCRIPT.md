@@ -32,9 +32,19 @@ Before recording: `python app.py` running in a browser tab, a terminal open at t
 
 ## 5. Triggered failures in the terminal (2:00–2:45)
 
-**Do:** in the terminal run `python demo_failures.py` and scroll.
+**Do:** in the terminal, run these two commands (they're also in the README's error-handling section).
 
-**Say:** "This script breaks every tool on purpose. Section one is the no-results case you just saw, from the agent's side — outfit and fit card are `None`. Section two, empty wardrobe — general advice, no exception. Section three, `create_fit_card` with an empty outfit string returns an error message without ever calling the LLM. Section four sets an invalid Groq key inside this process only — both LLM tools catch the 401 and return `[fallback]` templates, and the agent still completes. My real key isn't touched."
+```bash
+python -c "from tools import search_listings, create_fit_card; print(create_fit_card('', search_listings('vintage graphic tee', max_price=50)[0]))"
+```
+
+**Say:** "Calling `create_fit_card` with an empty outfit string returns an error message without ever calling the LLM."
+
+```bash
+python -c "import os; os.environ['GROQ_API_KEY']='bad'; from tools import search_listings, suggest_outfit; from utils.data_loader import get_example_wardrobe; print(suggest_outfit(search_listings('vintage graphic tee', max_price=30)[0], get_example_wardrobe()))"
+```
+
+**Say:** "And here the Groq key is invalid inside this one process — the tool catches the 401 and returns a `[fallback]` template outfit built from my wardrobe instead of crashing. My real key in `.env` isn't touched."
 
 ## 6. Tests and wrap-up (2:45–3:00)
 
