@@ -2,6 +2,12 @@
 
 This starter kit contains everything you need to begin Project 2.
 
+## Demo
+
+**Demo video:** [ADD LINK HERE]
+
+The video shows a complete run from a natural-language query through all three tools to a fit card, narrates which tool is called at each step and why, shows state passing from the selected listing into the outfit and from the outfit into the caption, and triggers the no-results failure path with the agent's graceful response.
+
 ## What's Included
 
 ```

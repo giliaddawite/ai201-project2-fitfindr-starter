@@ -124,17 +124,20 @@ Describe what you're looking for — include size and price if you want to filte
         with gr.Row():
             listing_output = gr.Textbox(
                 label="🛍️ Top listing found",
-                lines=8,
+                lines=14,
+                max_lines=40,
                 interactive=False,
             )
             outfit_output = gr.Textbox(
                 label="👗 Outfit idea",
-                lines=8,
+                lines=14,
+                max_lines=40,
                 interactive=False,
             )
             fitcard_output = gr.Textbox(
                 label="✨ Your fit card",
-                lines=8,
+                lines=14,
+                max_lines=40,
                 interactive=False,
             )
 
