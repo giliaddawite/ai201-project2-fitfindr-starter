@@ -110,9 +110,39 @@ def create_fit_card(outfit: str, new_item: dict) -> str
 
 **Returns:** a `str` of 2–4 sentences written like a casual OOTD caption, mentioning the item name, price, and platform once each (LLM at temperature 1.0, so repeated calls differ). If `outfit` is empty, whitespace, or `None` it returns `"Error: cannot create a fit card without an outfit suggestion."` without calling the LLM. If the listing lacks `title`, `price`, or `platform` it returns `"Error: listing is missing required fields (title, price, platform)."`. If the Groq call fails it returns a `[fallback]` template caption built from the item fields.
 
-### Planning loop (not a tool)
+Tests for all three tools, the parser, the loop, and the UI handler are in `tests/` — run `python -m pytest tests/` from the repo root (the LLM is mocked, so no key is needed).
 
-`run_agent(query: str, wardrobe: dict) -> dict` in `agent.py` parses the query with regex (`_parse_query`), calls the three tools in order, and returns a session dict with keys `query`, `parsed`, `search_results`, `selected_item`, `wardrobe`, `outfit_suggestion`, `fit_card`, `error`. Tests for everything are in `tests/` — run `python -m pytest tests/` from the repo root (the LLM is mocked, so no key is needed).
+---
+
+## How the Planning Loop Works
+
+`run_agent(query: str, wardrobe: dict) -> dict` in `agent.py` is a fixed-order pipeline with early exits: parse → search → select → suggest → fit card. The order never changes because each tool's input is the previous tool's output. What the loop actually *decides* at each step is whether to continue, and on what:
+
+1. **Parse.** `_parse_query(query)` uses regex, not the LLM. It pulls a price ceiling from phrases like `under $30`, `less than 45 dollars`, `max 50`; a size from `size M`, `size US 8.5`, `in L`; and builds the description from the **first sentence only** with those phrases and filler ("I'm looking for", "show me") removed. Later sentences are dropped because they usually describe the wardrobe or ask a styling question, which the wardrobe dict and Tools 2–3 already cover. Regex was chosen over an LLM parse because it is free, instant, deterministic, and unit-testable.
+2. **Search, then branch.** `search_listings(**parsed)` is called. The loop checks `isinstance(result, str)`:
+   - **string** → the tool found nothing and returned its own message. The loop copies it into `session["error"]` and **returns immediately**. `suggest_outfit` and `create_fit_card` never run, so no LLM call is spent on an empty result.
+   - **list** → stored in `session["search_results"]`; continue.
+3. **Select.** `session["selected_item"] = search_results[0]` — the highest-scoring listing, cheapest on ties. The rest of the list stays in the session so the UI can say how many other matches there were.
+4. **Suggest.** `suggest_outfit(selected_item, wardrobe)`. The loop does not branch on the wardrobe; the tool itself detects an empty `items` list and switches prompts. Whatever string comes back (LLM text or a `[fallback]` template) is stored and the loop continues.
+5. **Fit card, then check.** `create_fit_card(outfit_suggestion, selected_item)`. The result is stored in `session["fit_card"]`; if it starts with `"Error:"` (which only happens if the outfit text was empty), the loop also copies it into `session["error"]` so the UI shows it.
+6. **Done.** The loop knows it is finished when either `fit_card` or `error` is set. The whole body is wrapped in `try/except`, so any unexpected exception becomes `session["error"] = "Something went wrong while running the agent: ..."` instead of a traceback.
+
+## State Management
+
+All state for one interaction lives in a single `session` dict, created by `_new_session()` at the start of `run_agent()` and returned at the end. There are no module-level globals, so two calls to `run_agent()` cannot leak into each other.
+
+| Key | Written when | Read by |
+|---|---|---|
+| `query` | session creation | `_parse_query` |
+| `parsed` (`description`, `size`, `max_price`) | after parsing | `search_listings` (unpacked as kwargs) |
+| `search_results` | after search succeeds | item selection; UI "N other matches" line |
+| `selected_item` | after selection | `suggest_outfit`, `create_fit_card`, UI listing panel |
+| `wardrobe` | session creation (from the caller) | `suggest_outfit` |
+| `outfit_suggestion` | after Tool 2 | `create_fit_card`, UI outfit panel |
+| `fit_card` | after Tool 3 | UI fit-card panel |
+| `error` | on any early exit or tool error string | `handle_query` in `app.py` checks it first |
+
+Tools never read or write the session themselves. The loop pulls a value out, passes it as a plain function argument, and writes the return value back — which is what keeps each tool testable with hand-built inputs. This was verified with identity checks (`is`, not `==`) during Milestone 4: the dict passed to `suggest_outfit` **is** `session["selected_item"]` **is** `search_results[0]`, and the string passed to `create_fit_card` **is** the object `suggest_outfit` returned. `app.py` receives the whole session, reads `error` first, and otherwise maps `selected_item`, `outfit_suggestion`, and `fit_card` onto the three Gradio panels.
 
 ---
 
@@ -222,6 +252,19 @@ Writing the relevance-scoring table for `search_listings` before any code (style
 The spec originally said `search_listings` returns an empty list `[]` when nothing matches and that the *planning loop* composes the "No listings matched..." message. While testing the no-results path directly from the terminal, I decided I preferred the message to come from the tool itself, so the same informative text appears whether the tool is called on its own or through the agent. The return type became `list[dict] | str`, the loop now checks `isinstance(result, str)` instead of `len(result) == 0`, and planning.md, the docstring, and the tests were all updated to match.
 
 Two smaller divergences surfaced the same way. Size matching was specified as substring-based, but the first test showed "8" matching the waist size "W28" and "US 8.5", so it became whole-token matching. And the course-suggested model, `meta-llama/llama-4-scout-17b-16e-instruct`, turned out to be retired on Groq (404 `model_not_found`), so the code uses `openai/gpt-oss-120b` via a `GROQ_MODEL` constant that can be overridden in `.env`.
+
+---
+
+## AI Usage
+
+I used Claude Code (Claude Fable 5.1) in the terminal for every milestone, always feeding it a specific section of `planning.md` rather than "build the agent". Instances where I directed it and then revised or overrode what it produced:
+
+1. **Tool 1 from the spec, then a correction on size matching.** I gave Claude the Tool 1 section (parameters, scoring table, tie-break, failure behaviour) and told it to use `load_listings()` rather than re-reading the file. The first version matched sizes by substring as the spec said, and the verification query "black combat boots size 8" came back with two wrong items because "8" is a substring of "W28" and "US 8.5". I had it switch to whole-token matching and update the spec so planning.md and the code agreed.
+2. **Model choice overridden by reality.** I directed Claude to use `meta-llama/llama-4-scout-17b-16e-instruct` per the course instructions. The live call returned a 404 `model_not_found`; I had it list the models my key could actually reach and switch to `openai/gpt-oss-120b`, exposed as a `GROQ_MODEL` constant so the choice is a one-line change.
+3. **Overrode the no-results design.** Claude implemented `search_listings` returning `[]` on no match, with the loop composing the "No listings matched..." text — exactly what the stub docstring and my original spec said. When I tested it from the terminal I decided I wanted the message to come from the tool itself, so I had it change the return type to `list[dict] | str`, update the loop to check `isinstance(result, str)`, and re-sync planning.md, the docstring, and the tests.
+4. **Rejected an over-complex diagram.** Claude's first architecture diagram had about 25 nodes including every fallback branch and data source. I asked twice for something simpler; the final version is a single vertical line with one side branch per tool, and the API-failure fallbacks moved into the error-handling table instead.
+5. **Caught a prompt bug during failure testing, then fixed it.** When I deliberately ran `suggest_outfit` with an empty wardrobe, the model replied by asking me to list my wardrobe — the shared system prompt said "only reference wardrobe pieces that are listed", which contradicts the no-wardrobe path. I had Claude give that path its own system prompt that forbids asking for more information, re-ran it three times to confirm, and added a regression test.
+6. **Removed extra files it generated.** Claude added a `demo_failures.py` script and a `DEMO_SCRIPT.md` on its own initiative. I kept the repo to the required files: the script was deleted and its commands moved inline into the error-handling section above, and the demo notes stay local and untracked.
 
 ---
 
